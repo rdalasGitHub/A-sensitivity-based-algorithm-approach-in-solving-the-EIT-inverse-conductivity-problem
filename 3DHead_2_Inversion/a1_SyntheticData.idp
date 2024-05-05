@@ -1,0 +1,226 @@
+load "msh3"
+load "gmsh"
+load "tetgen"
+load "medit"
+include "getARGV.idp"
+include "ffmatlib.idp"
+
+func int SyntheticData(real rr, real d, real[int] proj, real[int] projdirec) {
+
+    //center-radius of perturbation
+	real[int] center(3);
+	center = proj + d*projdirec;
+	real px = center[0];
+	real py = center[1];
+	real pz = center[2];
+	real pr = rr;
+string filename = "CM_sphere_synthetic_h07_d"+d*100+"_r"+rr*10+"_-100proj.txt";
+
+/////////////////////////////////////////Start Mesh Generation/////////////////////////////////////////
+/////////////////////////////////////////Parameters/////////////////////////////////////////
+int boundaryLabel = 5;
+int brainLabel = 3;
+int boneLabel = 2;
+int scalpLabel = 1;
+
+mesh3 ball = gmshload3("ball_h70.msh");
+
+//finite element space
+fespace Vh(ball,P1);
+fespace Ph(ball,P0);
+
+//defining sigma in fespace
+Ph<real> sigdata;
+Ph<real> reg;
+
+{
+//regions for sigma
+	reg = ((x-px)*(x-px)+(y-py)*(y-py)+(z-pz)*(z-pz) <= pr*pr);
+}
+
+//sigma. coefficients 0.33, 0.004, 0.33 are conductivity of brain, bone, scalp, respectively.
+sigdata = 0.33*(region==brainLabel) + 0.004*(region==boneLabel) + 0.33*(region==scalpLabel);
+//medit("sigma",ball,sigdata);
+
+//Definition of the Current Density on the Boundary
+func f0s=sin(x*y);
+real f1s = int2d(ball,boundaryLabel)(f0s);
+real f2s = int2d(ball,boundaryLabel)(1);
+func nbf= f0s*f2s - f1s;
+real f3s = int2d(ball,boundaryLabel)(nbf);
+
+/////////////////////////////////////////START 3D Forward Problem/////////////////////////////////////////
+//The Matrices
+Vh uh,vh;
+
+int nna=Vh.ndof; //number of nodes 
+int n1=nna+1; //number of unknowns
+macro Grad(u) [dx(u),dy(u),dz(u)]//
+
+//submatrix A
+varf m1(uh,vh) = int3d(ball) (sigdata*Grad(uh)'*Grad(vh)); 
+matrix M1=m1(Vh,Vh);
+//submatrix b
+varf m2(uh,vh) = int3d(ball)(vh);
+real[int] M2=m2(0,Vh);
+//The Matrix
+matrix Kdata=[[M1,M2],[M2',0]];
+
+//RHS of the equation
+Vh ut=nbf;
+varf vr(uh,vh)=int2d(ball,boundaryLabel)(ut*vh);
+real[int] bb(n1),bb1(1),b(nna);
+bb1=0.;
+b=vr(0,Vh);
+bb=[b,bb1]; 
+
+//Solving the Forward System
+real[int] nu(n1), c(1), u0(nna);
+set(Kdata,solver=UMFPACK);
+nu=Kdata^-1*bb;
+[u0,c]=nu;
+/////////////////////////////////////////END 3D Forward Problem/////////////////////////////////////////
+
+/////////////////////////////////////////START Sensitivity/////////////////////////////////////////
+//perturbation characteristics
+Ph mu; //direction of perturbations (charteristic function)
+mu = reg;
+
+//Constructing the RHS of the Sensitivity
+varf vrs(uh,vh)= int3d(ball)(-mu * Grad(uh)' * Grad(vh));
+matrix ms = vrs(Vh,Vh);
+
+real[int] MS(nna), bb1s(1), bbs(n1);
+MS = ms*u0;
+bb1s = 0.;
+bbs = [MS, bb1s];
+
+//Solving the Sensitivity
+real[int] nus(n1), cs(1);
+Vh u0s, del;
+set(Kdata, solver=UMFPACK);
+nus=Kdata^-1*bbs;
+[u0s[],cs]=nus; //u0s is the sensitivity of potential. cs penalty term coefficient
+/////////////////////////////////////////END Sensitivity/////////////////////////////////////////
+
+{
+ofstream fh(filename);
+fh.precision(16);
+fh<< u0s[];
+}
+
+//getting indices of u0s belonging on the boundary
+int kawnter = 0;
+int NbBoundaryElements = ball.nbe;
+real[int] UUUtemp(3*NbBoundaryElements), xxtemp(3*NbBoundaryElements), yytemp(3*NbBoundaryElements), zztemp(3*NbBoundaryElements); 
+for (int k = 0; k < NbBoundaryElements; k++){
+    if(ball.be(k).label == 5){    
+        //indices of u0s on the boundary    
+        int Vertex1 = ball.be(k)[0];
+        int Vertex2 = ball.be(k)[1];
+        int Vertex3 = ball.be(k)[2];
+        UUUtemp[3*kawnter] = Vertex1;
+        UUUtemp[3*kawnter+1] = Vertex2;
+        UUUtemp[3*kawnter+2] = Vertex3;
+        //x coordinate of boundary vertices
+        xxtemp[3*kawnter] = ball.be(k)[0].x;
+        xxtemp[3*kawnter+1] = ball.be(k)[1].x;
+        xxtemp[3*kawnter+2] = ball.be(k)[2].x;
+        //y coordinate of boundary vertices
+        yytemp[3*kawnter] = ball.be(k)[0].y;
+        yytemp[3*kawnter+1] = ball.be(k)[1].y;
+        yytemp[3*kawnter+2] = ball.be(k)[2].y;
+        //z coordinate of boundary vertices
+        zztemp[3*kawnter] = ball.be(k)[0].z;
+        zztemp[3*kawnter+1] = ball.be(k)[1].z;
+        zztemp[3*kawnter+2] = ball.be(k)[2].z;
+        kawnter++;
+    }
+}
+cout<< "numberBoundary" << kawnter << endl;
+real[int] UUU(3*kawnter), xx(3*kawnter), yy(3*kawnter), zz(3*kawnter);
+UUU = UUUtemp;
+xx = xxtemp;
+yy = yytemp;
+zz = zztemp;
+
+//For R1 (new)
+real[int] u1border(UUU.n);
+int indexofu1;
+for (int k=0; k<UUU.n ;k++){
+    indexofu1 = UUU[k];
+    u1border[k] = u0s[][indexofu1];
+} 
+real maxvalofu1 = u1border.max;
+real minvalofu1 = u1border.min;
+real[int] maxxyz = [xx[u1border.imax], yy[u1border.imax], zz[u1border.imax]];
+real[int] minxyz = [xx[u1border.imin], yy[u1border.imin], zz[u1border.imin]];
+
+real sum = abs(maxvalofu1) + abs(minvalofu1);
+real ratio = abs(maxvalofu1)/sum;
+cout << "RATIO" << ratio << endl;
+real[int] projectiontemp = (1-ratio)*minxyz + ratio*maxxyz;
+real nor1 = projectiontemp[0]^2 + projectiontemp[1]^2 + projectiontemp[2]^2;
+real nor2 = sqrt(nor1);
+real[int] projection = projectiontemp/nor2;
+cout<<"PROJECTION"<<projection<<endl;
+
+//For R2
+//Getting unique boundary indices. 
+//UUUunique contains unique indices
+UUU.sort;
+real[int] UUUuniquetemp(UUU.n);
+int numberofboundaryindices=1;
+UUUuniquetemp[0]=UUU[0];
+for(int k=0; k<UUU.n-1; k++){
+    if(UUU[k]!=UUU[k+1]){
+        UUUuniquetemp[numberofboundaryindices]=UUU[k+1];
+        numberofboundaryindices++;
+    }
+}
+real[int] UUUunique(numberofboundaryindices);
+UUUunique = UUUuniquetemp; //getting rid of zeros
+
+//gettting max value of the sensitivity on the boundary
+//u1borderposunique contains absolute values of the sensitivity on the boundary
+int tempindexofu1;
+real[int] u1borderposunique(UUUunique.n);
+for (int k=0; k<UUUunique.n ;k++){
+    tempindexofu1 = UUUunique[k];
+    u1borderposunique[k]=abs(u0s[][tempindexofu1]);
+} 
+
+//counting the "affected" indices on the boundary
+//u1ofaffected contains the sensitivity values of the "affected" part of the boundary
+real numberofaffected = 0.;
+real tol=0.2;
+real[int] u1ofaffected(UUUunique.n);
+for (int k=0; k<UUUunique.n ;k++){
+    if (u1borderposunique[k] > tol*u1borderposunique.max){
+        u1ofaffected[numberofaffected] = u1borderposunique[k];
+        numberofaffected = numberofaffected + 1.;
+    }
+}
+//to avoid division by 0
+if (numberofaffected == 0.){
+    numberofaffected = 1.;
+}
+real normofaffected= sqrt(u1ofaffected'*u1ofaffected);
+real normofboundary = sqrt(u1borderposunique'*u1borderposunique); 
+real R2LHS = (normofaffected/numberofaffected);
+real R3LHS = normofboundary;
+
+real[int] resulting(5);
+resulting = projection;
+resulting[3] = R2LHS;
+resulting[4] = R3LHS;
+
+string filename2 = "projLHSR2LHSR3_"+filename;
+{
+ofstream fh(filename2);
+fh.precision(16);
+fh<< resulting;
+}
+
+return scalpLabel;
+}

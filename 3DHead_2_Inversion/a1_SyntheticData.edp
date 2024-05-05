@@ -1,0 +1,27 @@
+load "msh3"
+load "tetgen"
+load "medit"
+include "a1_SyntheticData.idp"
+include "getARGV.idp"
+
+real[int] rarray(2);
+int temp;
+real[int] darray(8);
+real[int] proj =[-1., 0., 0.];
+real[int] projdirec = -proj;
+
+real d; //depth
+
+func string getfilename(real d, string identifier) {
+	string filename = identifier+"_d"+d+".txt";
+	return filename;
+}
+
+for (int k=0; k<darray.n; k++){
+    d=0.45+0.05*k;
+    darray[k] = d;
+    for [i, rarrayi:rarray]{
+        rarrayi = 0.1*(i+1);
+        temp = SyntheticData(rarrayi,d, proj, projdirec);
+    }   
+}
