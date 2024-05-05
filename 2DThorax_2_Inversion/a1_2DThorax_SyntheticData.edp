@@ -1,0 +1,24 @@
+load "msh3"
+load "tetgen"
+load "medit"
+include "a1_2DThorax_SyntheticData.idp"
+include "getARGV.idp"
+
+real[int] rarray(2);
+real temp;
+real[int] darray(8);
+real[int] proj = [2.4144, 2.42141];
+real[int] thoraxcenter = [1.855276337, 1.503403159];
+real[int] projdirec = thoraxcenter - proj;
+
+real d; //depth
+
+
+for (int k=0; k<darray.n; k++){
+    d=0.06+0.02*k;
+    darray[k] = d;
+    for [i, rarrayi:rarray]{
+        rarrayi = 0.01*(i+1);
+        temp = SyntheticDataGeneration(rarrayi,d, proj,projdirec);
+    }
+}
