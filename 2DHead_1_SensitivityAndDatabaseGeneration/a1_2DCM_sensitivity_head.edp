@@ -1,0 +1,42 @@
+load "msh3"
+load "tetgen"
+load "medit"
+include "a1_2DCM_sensitivity_head.idp"
+include "getARGV.idp"
+
+real[int] rarray(5);
+real[int] R2Average(5);
+real[int] R3Boundary(5);
+real[int] temp(2);
+real[int] darray(8);
+real[int] proj =[-1., 0.];
+
+real d; //depth
+
+func string getfilename(real d, string identifier) {
+	string filename = identifier+"_d"+d+".txt";
+	return filename;
+}
+
+for (int k=0; k<darray.n; k++){
+    d=0.45+0.05*k;
+    darray[k] = d;
+    for [i, rarrayi:rarray]{
+        rarrayi = 0.05*(i+1);
+        temp = DatabaseGeneration(rarrayi,d, proj);
+        R2Average[i] = temp[0];
+        R3Boundary[i] = temp[1];
+    }
+    string R2data = getfilename(d*100,"R2LHS");
+    string R3data = getfilename(d*100, "R3LHS");
+    {
+    ofstream fh(R2data);
+    fh.precision(16);
+    fh<< R2Average;
+    }
+    {
+    ofstream fi(R3data);
+    fi.precision(16);
+    fi<< R3Boundary;
+    }       
+}

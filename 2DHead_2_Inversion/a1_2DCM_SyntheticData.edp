@@ -1,0 +1,22 @@
+load "msh3"
+load "tetgen"
+load "medit"
+include "a1_2DCM_SyntheticData.idp"
+include "getARGV.idp"
+
+real[int] rarray(2);
+real temp;
+real[int] darray(8);
+real[int] proj =[-1., 0.];
+
+real d; //depth
+
+
+for (int k=0; k<darray.n; k++){
+    d=0.45+0.05*k;
+    darray[k] = d;
+    for [i, rarrayi:rarray]{
+        rarrayi = 0.1*(i+1);
+        temp = SyntheticDataGeneration(rarrayi,d, proj);
+    }
+}

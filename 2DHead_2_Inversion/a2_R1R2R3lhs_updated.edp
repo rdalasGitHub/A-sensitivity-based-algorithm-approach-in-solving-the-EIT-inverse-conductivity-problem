@@ -1,0 +1,89 @@
+//input:synthetic data
+//output: projection of the center of perturbation, LHS of R2, LHS of R3
+load "tetgen"
+load "medit"
+include "ffmatlib.idp" //to import to matlab
+
+int nunique=1275; //number of unique vertices on boundary
+//filenames
+string filenameu = "uCM2D_synthetic_d7.5_r2.txt";
+string filenamex = "xCM2D_synthetic_d7.5_r2.txt";
+string filenamey = "yCM2D_synthetic_d7.5_r2.txt";
+
+//load sensitivity
+real[int] u0sBoundarytemp(nunique+1), xxtemp(nunique+1), yytemp(nunique+1);
+real[int] u0sBoundary(nunique), xx(nunique), yy(nunique);
+{
+ifstream fh(filenameu);
+for (int i = 0; i<nunique+1; ++i ){
+fh>> u0sBoundarytemp(i);}
+}
+{
+ifstream fx(filenamex);
+for (int i = 0; i<nunique+1; ++i ){
+fx>> xxtemp(i);}
+}
+{
+ifstream fy(filenamey);
+for (int i = 0; i<nunique+1; ++i ){
+fy>> yytemp(i);}
+}
+
+for (int k=0; k<nunique; k++ ){
+u0sBoundary[k] = u0sBoundarytemp[k+1];
+xx[k] = xxtemp[k+1];
+yy[k] = yytemp[k+1];
+}
+//For R1 (new)
+real maxvalofu1 = u0sBoundary.max;
+real minvalofu1 = u0sBoundary.min;
+
+real[int] maxxy = [xx[u0sBoundary.imax], yy[u0sBoundary.imax]];
+real[int] minxy = [xx[u0sBoundary.imin], yy[u0sBoundary.imin]];
+real sum = abs(maxvalofu1) + abs(minvalofu1);
+real ratio = abs(maxvalofu1)/sum;
+cout << "RATIO" << ratio << endl;
+real[int] projectiontemp = (1-ratio)*minxy + ratio*maxxy;
+real nor1 = projectiontemp[0]^2 + projectiontemp[1]^2;
+real nor2 = sqrt(nor1);
+real[int] projection = projectiontemp/nor2;
+cout<<"PROJECTION"<<projection<<endl;
+
+//For R2
+//Getting absolute value of sensitivity on boundary
+int tempindexofu1;
+real[int] u0spos(nunique);
+for (int k=0; k<nunique ;k++){
+    u0spos[k]=abs(u0sBoundary[k]);
+} 
+//counting the "affected" indices on the boundary
+real numberofaffected = 0.;
+real tol=0.2;
+real[int] u0saffected(nunique);
+for (int k=0; k<nunique ;k++){
+    if (u0spos[k] > tol*u0spos.max){
+        u0saffected[numberofaffected] = u0spos[k];
+        numberofaffected = numberofaffected + 1.;
+    }
+}
+//to avoid division by 0
+if (numberofaffected == 0.){
+    numberofaffected = 1.;
+}
+real normofaffected= sqrt(u0saffected'*u0saffected);
+real normofboundary = sqrt(u0spos'*u0spos); 
+real R2LHS = normofaffected/numberofaffected;
+real R3LHS = normofboundary;
+
+real[int] resulting(5);
+resulting = projection;
+resulting[3] = R2LHS;
+resulting[4] = R3LHS;
+
+
+string filename2 = "projLHSR2LHSR3_"+filenameu;
+{
+ofstream fh(filename2);
+fh.precision(16);
+fh<< resulting;
+}
