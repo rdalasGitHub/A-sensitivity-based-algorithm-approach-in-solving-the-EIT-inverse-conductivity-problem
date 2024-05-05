@@ -1,0 +1,108 @@
+load "msh3"
+load "tetgen"
+load "medit"
+include "ffmatlib.idp" //to import to matlab
+
+
+//Parameters
+int boundaryLabel=1;
+real d = 0.75;
+real r = 0.2;
+real[int] proj = [-1., 0., 0.];
+//real[int] proj = [0.6, 0.8, 0.];
+//real[int] proj = [1./3. , -2./3., 2./3.];
+//real[int] proj = [0.8, 0., 0.6];
+string filename = "CM_sphere_synthetic_h07_d"+d*100+"_r"+r*10+"_-100proj.txt";
+real[int] projdirec = -proj;
+    //center-radius of perturbation
+	real[int] center(3);
+	center = proj + d*projdirec;
+	real px = center[0];
+	real py = center[1];
+	real pz = center[2];
+	real pr = r;
+//mesh
+mesh3 ball = readmesh3("ball_h07.mesh");
+
+//Definition of the Current Density on the Boundary
+func f0s=sin(x*y);
+real f1s = int2d(ball,boundaryLabel)(f0s);
+real f2s = int2d(ball,boundaryLabel)(1);
+func nbf= f0s*f2s - f1s;
+real f3s = int2d(ball,boundaryLabel)(nbf);
+
+//finite element space
+fespace Vh(ball,P1);
+fespace Ph(ball,P0);
+//defining sigma in fespace
+Ph<real> sigdata;
+Ph<real> reg;
+
+//sigma value of the inclusions
+real sig1 = 0.33;
+sigdata = sig1;
+{
+	//regions for sigma
+	reg = ((x-px)*(x-px)+(y-py)*(y-py)+(z-pz)*(z-pz) <= pr*pr); //sphere
+}
+
+/////////////////////////////////////////START 3D Forward Problem/////////////////////////////////////////
+//The Matrices
+Vh uh,vh;
+
+int nna=Vh.ndof; //number of nodes 
+int n1=nna+1; //number of unknowns
+macro Grad(u) [dx(u),dy(u),dz(u)]//
+
+//submatrix A
+varf m1(uh,vh) = int3d(ball) (sigdata*Grad(uh)'*Grad(vh)); 
+matrix M1=m1(Vh,Vh);
+//submatrix b
+varf m2(uh,vh) = int3d(ball)(vh);
+real[int] M2=m2(0,Vh);
+//The Matrix
+matrix Kdata=[[M1,M2],[M2',0]];
+
+//RHS of the equation
+Vh ut=nbf;
+varf vr(uh,vh)=int2d(ball,boundaryLabel)(ut*vh);
+real[int] bb(n1),bb1(1),b(nna);
+bb1=0.;
+b=vr(0,Vh);
+bb=[b,bb1]; 
+
+//Solving the Forward System
+real[int] nu(n1), c(1), u0(nna);
+set(Kdata,solver=UMFPACK);
+nu=Kdata^-1*bb;
+[u0,c]=nu;
+/////////////////////////////////////////END 3D Forward Problem/////////////////////////////////////////
+
+/////////////////////////////////////////START Sensitivity/////////////////////////////////////////
+//perturbation characteristics
+Ph mu; //direction of perturbations (charteristic function)
+mu = reg;
+
+//Constructing the RHS of the Sensitivity
+varf vrs(uh,vh)= int3d(ball)(-mu * Grad(uh)' * Grad(vh));
+matrix ms = vrs(Vh,Vh);
+
+real[int] MS(nna), bb1s(1), bbs(n1);
+MS = ms*u0;
+bb1s = 0.;
+bbs = [MS, bb1s];
+
+//Solving the Sensitivity
+real[int] nus(n1), cs(1);
+Vh u0s;
+set(Kdata, solver=UMFPACK);
+nus=Kdata^-1*bbs;
+[u0s[],cs]=nus; //u0s is the sensitivity of potential. cs penalty term coefficient
+/////////////////////////////////////////END Sensitivity/////////////////////////////////////////
+//medit("ball with u", ball, u0s);
+
+{
+ofstream fh(filename);
+fh.precision(16);
+fh<< u0s[];
+}

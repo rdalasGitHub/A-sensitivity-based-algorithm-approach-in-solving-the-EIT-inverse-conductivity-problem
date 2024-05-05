@@ -1,0 +1,121 @@
+//input: ffmatlib.idp, mesh, synthetic data
+//output: projection of the center of perturbation, LHS of R2, LHS of R3
+
+load "msh3"
+load "tetgen"
+load "medit"
+include "ffmatlib.idp" //to import to matlab
+
+//mesh
+mesh3 ball = readmesh3("ball_h07.mesh");
+
+fespace Vh(ball, P1);
+Vh u0s;
+
+//load sensitivity
+string filename = "CM_sphere_synthetic_h07_d30_r2_-100proj.txt";
+ifstream g(filename); g >> u0s[];
+
+//getting indices of u0s belonging on the boundary
+int NbBoundaryElements = ball.nbe;
+real[int] UUU(3*NbBoundaryElements), xx(3*NbBoundaryElements), yy(3*NbBoundaryElements), zz(3*NbBoundaryElements); 
+for (int k = 0; k < NbBoundaryElements; k++){
+//indices of u0s on the boundary    
+int Vertex1 = ball.be(k)[0];
+int Vertex2 = ball.be(k)[1];
+int Vertex3 = ball.be(k)[2];
+UUU[k] = Vertex1;
+UUU[k+NbBoundaryElements] = Vertex2;
+UUU[k+2*NbBoundaryElements] = Vertex3;
+//x coordinate of boundary vertices
+xx[k] = ball.be(k)[0].x;
+xx[k+NbBoundaryElements] = ball.be(k)[1].x;
+xx[k+2*NbBoundaryElements] = ball.be(k)[2].x;
+//y coordinate of boundary vertices
+yy[k] = ball.be(k)[0].y;
+yy[k+NbBoundaryElements] = ball.be(k)[1].y;
+yy[k+2*NbBoundaryElements] = ball.be(k)[2].y;
+//z coordinate of boundary vertices
+zz[k] = ball.be(k)[0].z;
+zz[k+NbBoundaryElements] = ball.be(k)[1].z;
+zz[k+2*NbBoundaryElements] = ball.be(k)[2].z;
+}
+//For R1 (new)
+real[int] u1border(UUU.n);
+int indexofu1;
+for (int k=0; k<UUU.n ;k++){
+    indexofu1 = UUU[k];
+    u1border[k] = u0s[][indexofu1];
+} 
+real maxvalofu1 = u1border.max;
+real minvalofu1 = u1border.min;
+real[int] maxxyz = [xx[u1border.imax], yy[u1border.imax], zz[u1border.imax]];
+real[int] minxyz = [xx[u1border.imin], yy[u1border.imin], zz[u1border.imin]];
+
+real sum = abs(maxvalofu1) + abs(minvalofu1);
+real ratio = abs(maxvalofu1)/sum;
+cout << "RATIO" << ratio << endl;
+real[int] projectiontemp = (1-ratio)*minxyz + ratio*maxxyz;
+real nor1 = projectiontemp[0]^2 + projectiontemp[1]^2 + projectiontemp[2]^2;
+real nor2 = sqrt(nor1);
+real[int] projection = projectiontemp/nor2;
+cout<<"PROJECTION"<<projection<<endl;
+
+//For R2
+//Getting unique boundary indices. 
+//UUUunique contains unique indices
+UUU.sort;
+real[int] UUUuniquetemp(UUU.n);
+int numberofboundaryindices=1;
+UUUuniquetemp[0]=UUU[0];
+for(int k=0; k<UUU.n-1; k++){
+    if(UUU[k]!=UUU[k+1]){
+        UUUuniquetemp[numberofboundaryindices]=UUU[k+1];
+        numberofboundaryindices++;
+    }
+}
+real[int] UUUunique(numberofboundaryindices);
+UUUunique = UUUuniquetemp; //getting rid of zeros
+
+//gettting max value of the sensitivity on the boundary
+//u1borderposunique contains absolute values of the sensitivity on the boundary
+int tempindexofu1;
+real[int] u1borderposunique(UUUunique.n);
+for (int k=0; k<UUUunique.n ;k++){
+    tempindexofu1 = UUUunique[k];
+    u1borderposunique[k]=abs(u0s[][tempindexofu1]);
+} 
+
+//counting the "affected" indices on the boundary
+//u1ofaffected contains the sensitivity values of the "affected" part of the boundary
+real numberofaffected = 0.;
+real tol=0.2;
+real[int] u1ofaffected(UUUunique.n);
+for (int k=0; k<UUUunique.n ;k++){
+    if (u1borderposunique[k] > tol*u1borderposunique.max){
+        u1ofaffected[numberofaffected] = u1borderposunique[k];
+        numberofaffected = numberofaffected + 1.;
+    }
+}
+//to avoid division by 0
+if (numberofaffected == 0.){
+    numberofaffected = 1.;
+}
+real normofaffected= sqrt(u1ofaffected'*u1ofaffected);
+real normofboundary = sqrt(u1borderposunique'*u1borderposunique); 
+real R24thRootofAverageSensitivity = (normofaffected/numberofaffected)^(1./4.);
+real R3CubeRootofNormofBoundary = normofboundary^(1./3.);
+cout<< "R2 LHS_" << R24thRootofAverageSensitivity << "_R3 LHS_" << R3CubeRootofNormofBoundary << endl;
+
+real[int] resulting(5);
+resulting = projection;
+resulting[3] = R24thRootofAverageSensitivity;
+resulting[4] = R3CubeRootofNormofBoundary;
+
+string filename2 = "projLHSR2LHSR3_"+filename;
+%cout<< "MAX_"<< maxvalofu1 << "_MIN_" << minvalofu1 << "_xyzmax_" << maxxyz << "_xyzmin_" << minxyz << endl; 
+{
+ofstream fh(filename2);
+fh.precision(16);
+fh<< resulting;
+}
