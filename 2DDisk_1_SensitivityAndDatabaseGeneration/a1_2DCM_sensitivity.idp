@@ -1,0 +1,138 @@
+load "medit"
+include "ffmatlib.idp"
+
+
+func real[int] DatabaseGeneration(real r, real d, real[int] proj) {
+
+real[int] projdirec = -proj;
+//Parameters
+    //center-radius of perturbation
+	real[int] center(2);
+	center = proj + d*projdirec;
+	real px = center[0];
+	real py = center[1];
+	real pr = r;
+
+    mesh Th=readmesh("Th_1200.msh");
+
+//****************** Forward Problem *************************************************
+fespace Vh(Th,P1);
+fespace Ph(Th,P0);
+//mesh properties
+//int NbTriangles = Th.nt;
+//int NbVertices = Th.nv;
+//real meshsize = Th.hmax;
+
+//defining sigma in fespace
+Ph<real> sigdata;
+Ph<real> reg;
+
+//sigma value of the inclusions
+real sig1 = 0.33;
+
+{
+	//regions for sigma
+	reg = ((x-px)*(x-px)+(y-py)*(y-py) <= pr*pr); //sphere
+}
+sigdata = sig1;
+//medit("sigma",Th,sigdata);
+
+Vh uh,vh;
+int n=Vh.ndof; //number of nodes
+int n1=n+1; //number of unknowns
+macro Grad(u) [dx(u),dy(u)]//
+
+//****************** Definition of the current density on the boundary ***************
+func f0=sin(x*y);
+real f1 = int1d(Th,1)(f0);
+real f2 = int1d(Th,1)(1);
+func nbf= f0*f2 - f1;
+real f3 = int1d(Th,1)(nbf);
+
+//Matrix A
+varf a(uh,vh)=int2d(Th)(sigdata * Grad(uh)' * Grad(vh));
+varf s(uh,vh)= int1d(Th,1)(vh);
+matrix A=a(Vh,Vh);
+real[int] B=s(0,Vh);
+matrix AA=[[A,B],[B',0]];
+//RHS of the equation
+Vh ut=nbf;
+varf vr(uh,vh)=int1d(Th,1)(ut*vh);
+real[int] bb(n1),bb1(1),b(n);
+bb1=0.;
+b=vr(0,Vh);
+bb=[b,bb1]; 
+//Solving the Forward System
+real[int] nu(n1), c(1), u0(n);
+set(AA,solver=sparsesolver);
+nu=AA^-1*bb;
+[u0,c]=nu;
+/////////////////////////////////////////END Forward Problem/////////////////////////////////////////
+
+/////////////////////////////////////////START Sensitivity/////////////////////////////////////////
+//perturbation characteristics
+Ph mu; //direction of perturbations (charteristic function)
+mu = reg;
+//Constructing the RHS of the Sensitivity
+varf vrs(uh,vh)= int2d(Th)(-mu * Grad(uh)' * Grad(vh));
+matrix ms = vrs(Vh,Vh);
+
+real[int] MS(n), bb1s(1), bbs(n1);
+MS = ms*u0;
+bb1s = 0.;
+bbs = [MS, bb1s];
+
+//Solving the Sensitivity
+real[int] nus(n1), cs(1);
+Vh u0s;
+set(AA, solver=sparsesolver);
+nus=AA^-1*bbs;
+[u0s[],cs]=nus; //u0s is the sensitivity of potential. cs penalty term coefficient
+/////////////////////////////////////////END Sensitivity/////////////////////////////////////////
+
+/////////////////////////////////////////Import Sensitivity to Matlab/////////////////////////////////////////
+string filename = "sensitivity_d"+d*10+"_r" + r*10 + ".txt";
+//savemesh(Th, "Th.msh");
+//ffSaveVh(Th,Vh,"Vh.txt");
+ffSaveData(u0s,filename); 
+/////////////////////////////////////////END Import to Matlab/////////////////////////////////////////
+
+//getting indices of u0s belonging on the boundary
+int NbBoundaryElements = Th.nbe;
+real[int] UUU(NbBoundaryElements); 
+for (int k = 0; k < NbBoundaryElements; k++){
+//indices of u0s on the boundary    
+int Vertex1 = Th.be(k)[0];
+UUU[k] = Vertex1;
+}
+
+//gettting max value of the sensitivity on the boundary
+int tempindexofu1;
+real[int] u1borderpos(UUU.n);
+for (int k=0; k<UUU.n ;k++){
+    tempindexofu1 = UUU[k];
+    u1borderpos[k]=abs(u0s[][tempindexofu1]);
+}
+
+//counting the "affected" indices on the boundary
+real numberofaffected = 0.;
+real tol=0.2;
+real[int] u1ofaffected(UUU.n);
+for (int k=0; k<UUU.n ;k++){
+    if (u1borderpos[k] > tol*u1borderpos.max){
+        u1ofaffected[numberofaffected] = u1borderpos[k];
+        numberofaffected = numberofaffected + 1.;
+    }
+}
+//to avoid division by 0
+if (numberofaffected == 0.){
+    numberofaffected = 1.;
+}
+real normofaffected= sqrt(u1ofaffected'*u1ofaffected);
+real normofboundary = sqrt(u1borderpos'*u1borderpos); 
+real R2LHS = normofaffected/numberofaffected;
+real R3LHS = normofboundary;
+
+real[int] datagenerated = [R2LHS, R3LHS];
+return datagenerated;
+}
