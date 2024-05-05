@@ -1,0 +1,246 @@
+load "msh3"
+load "tetgen"
+load "medit"
+include "getARGV.idp"
+include "ffmatlib.idp" //to import to matlab
+
+func real[int] DatabaseGeneration(real r, real d, real[int] proj, real[int] projdirec) {
+
+mesh3 ball=readmesh3("ball66.mesh");
+int boundaryLabel = 1;
+/////////////////////////////////////////Start Assigning Electrodes/////////////////////////////////////////
+//finite element space
+fespace Vh(ball,P1);
+fespace Ph(ball,P0);
+string identifier = getARGV("-identifier", "10-10");
+string electrodesDescriptor = getARGV("-electrodes", identifier+".txt"); //File where the description of the electrodes can be found
+int L=0; //initial number of electrodes. will be adjusted by defineElectrodesIndicatorFunction()
+
+macro defineElectrodesIndicatorFunction(Vh, electrodesLonglat, electrodesInd, electrodesDescriptor, L)
+	real[int][int] electrodesLonglat;
+	Vh electrodesInd = 0;
+	
+	{
+		ifstream electrodesfile(electrodesDescriptor);
+
+		int nTropics;
+		electrodesfile >> nTropics;
+
+		int nElectrodesOnTropic;
+		real latitude, longitude, radius, xx, yy, zz;
+
+		int k = 0;
+		Vh ind#Tmp;
+
+		L = 0;
+
+		for (int kTropic = 0; kTropic < nTropics; ++kTropic) {
+			electrodesfile >> nElectrodesOnTropic;
+			electrodesfile >> latitude;
+			
+			L += nElectrodesOnTropic;
+		
+			electrodesLonglat.resize(L);
+
+			for (int kLong = 0; kLong < nElectrodesOnTropic; ++kLong) {
+				electrodesfile >> longitude;
+				electrodesfile >> radius;
+
+				electrodesLonglat[k++] = [longitude, latitude];
+				
+				xx = cos(longitude) * cos(latitude);
+				yy = sin(longitude) * cos(latitude);
+				zz = sin(latitude);
+				ind#Tmp = k * int((x - xx)^2 + (y - yy)^2 + (z - zz)^2 <= radius*radius);
+				electrodesInd[] += ind#Tmp[];
+			}
+		}
+
+		electrodesInd[] -= 1;
+	}// 
+
+defineElectrodesIndicatorFunction(Vh, electrodesLonglat, electrodesInd, electrodesDescriptor, L)
+
+//defining sigma in fespace
+Ph<real> sigdata;
+Ph<real> reg;
+
+//sigma value of the inclusions. 
+real sig1,sig2;
+sig1 = 0.33;
+
+{
+    //center-radius of perturbation
+	real[int] center(3);
+	center = proj + d*projdirec;
+	real px = center[0];
+	real py = center[1];
+	real pz = center[2];
+	real pr = r;
+	//regions for sigma
+	reg = ((x-px)*(x-px)+(y-py)*(y-py)+(z-pz)*(z-pz) <= pr*pr);
+}
+//sigma
+sigdata = sig1;//
+//medit("sigma",ball,sigdata);
+
+real[int] z1(L); //contact impedance
+z1 = 0.1; //constant across all electrodes
+
+Vh electrodesIndWithZ = 0;
+{
+	Vh electrodesIndWithZTmp = 0;
+	for (int k = 0; k < L; ++k) {
+		electrodesIndWithZTmp = real(electrodesInd == k) / z1(k);
+		electrodesIndWithZ[] += electrodesIndWithZTmp[];
+	}
+}
+/////////////////////////////////////////End of Assigning Electrodes/////////////////////////////////////////
+
+
+/////////////////////////////////////////Start 3D Forward Problem/////////////////////////////////////////
+/////////////////////////////////////////The Matrices/////////////////////////////////////////
+Vh uh,vh;
+int na=Vh.ndof;
+int nn=na+1;
+macro Grad(u) [dx(u),dy(u),dz(u)]//
+
+//first term of the NxN matrix
+varf m1(uh,vh) = int3d(ball) (sigdata*Grad(uh)'*Grad(vh)); 
+matrix M1=m1(Vh,Vh);
+//second term of the NxN matrix
+varf m2(uh,vh) = int2d(ball,boundaryLabel) (electrodesIndWithZ*uh*vh);
+matrix M2=m2(Vh,Vh);
+//the NxN matrix
+matrix A1= M1+M2;
+//cout<<A1.size<< "end of line"<< endl;
+//second term of Nx(L-1) matrix
+varf m3(uh,vh) = int2d(ball, boundaryLabel) (-real(electrodesInd == 0) * electrodesIndWithZ*vh);
+real [int,int] M3v1(na,1), M3v2(na,L-1);
+//cout<< na << "end of line" <<endl;
+M3v1 = m3(0,Vh);
+//cout<< electrodesInd[] << "end of line" <<endl;
+//cout<<L<< "end of line"<< endl;
+//matrix lokoloko=M3v1;
+//cout<<lokoloko.size<< "end of line"<< endl;
+//first term of Nx(L-1) matrix 
+for (int ii3=0; ii3<L-1; ii3++)
+{
+	varf m4(uh,vh)= int2d(ball, boundaryLabel)((electrodesInd == ii3+1) * electrodesIndWithZ*vh);
+	M3v2(:,ii3) = m4(0,Vh);
+	M3v2(:,ii3) = M3v2(:,ii3) + M3v1; //first term + second term
+}
+//the Nx(L-1) matrix
+matrix B1=M3v2;
+//cout<<B1.size<< "end of line"<< endl;
+
+//the(L-1)x(L-1) matrix
+real[int, int] M4(L-1, L-1);
+M4 = int2d(ball,boundaryLabel)((electrodesInd == 0) * electrodesIndWithZ);
+//changing the diagonal entries
+for (int j=0; j<L-1; ++j)
+{
+	M4(j,j) = M4(j,j) + int2d(ball, boundaryLabel)((electrodesInd == j+1) * electrodesIndWithZ);
+}	
+matrix C1=M4;
+//cout<<C1.size<< "end of line"<< endl;
+//stiffness matrix
+matrix Kdata=[[A1,B1],[B1',C1]];
+
+/////////////////////////////////////////Solving the System/////////////////////////////////////////
+int nf=na+L-1; //size of the system
+real[int] I(L), f2(L-1), f1(na), F(nf), ra(nf), B(L-1), u0(na), Vdata(L);
+//Right-hand side of the equation
+f1=0;
+//current I
+for(int j=0;j<L;++j)
+{
+I(j) = sin(electrodesLonglat[j][0]) * cos(electrodesLonglat[j][1]);
+}
+for(int j=0;j<L-1;++j)
+{
+f2(j) = I(0)-I(j+1);
+}
+F = [f1,f2];
+
+//
+set(Kdata,solver=UMFPACK);
+ra=Kdata^-1*F;
+[u0,B]=ra; //splitting r into \vec{u0} and \vec{B}
+Vdata(0) = B.sum; //U_1
+Vdata(1:L-1)=-B;
+
+real sumV;
+sumV = Vdata.sum;
+cout << "Sum V = " << sumV << endl;
+/////////////////////////////////////////End 3D Forward Problem/////////////////////////////////////////
+
+/////////////////////////////////////////Start Sensitivity-Conductivity/////////////////////////////////////////
+Ph mu; //direction of perturbations (charteristic function)
+mu = reg;
+/////////////////////////////////////////Constructing the RHS of the System/////////////////////////////////////////
+//The upper part of the RHS
+varf zz(uh,vh) = int3d(ball)(-mu * Grad(uh)' * Grad(vh));
+matrix Z = zz(Vh,Vh);
+
+real[int] Zu0(na), rhs(nf), sens(nf), Beta1(L-1);
+Zu0 = Z * u0;
+
+rhs = 0;
+rhs(0:na-1) = Zu0;
+//The lower part of the RHS is the 0 vector.
+
+/////////////////////////////////////////Solving Sensitivity/////////////////////////////////////////
+Vh u1;
+set(Kdata, solver=sparsesolver);
+sens = Kdata^-1*rhs;
+[u1[],Beta1]=sens; //u1 sensitivity of potential. Beta1 LC coefficients of the boundary voltages
+
+real[int] V1(L);
+V1(0) = Beta1.sum;
+V1(1:L-1) = -Beta1; //U
+cout<< "number of electrodes" << L << endl;
+
+/////////////////////////////////////////Import to Matlab for sensitivity/////////////////////////////////////////
+string filename = "sensitivity_d"+d*10+"_r" + r*10 + ".txt";
+ffSaveData(u1,filename);
+ffSaveData(electrodesInd, "electrodesInd" + filename);
+{ofstream fh("V1" + filename);
+ fh.precision(16);
+ fh<< V1;
+}
+/////////////////////////////////////////END Import to Matlab/////////////////////////////////////////
+
+//checking sum
+real sumV1;
+sumV1 = V1.sum;
+cout<< "Sum V1" << "=" << sumV1 << endl;
+
+//gettting absolute value of the sensitivity on the electrodes
+real[int] V1pos(V1.n);
+for (int k=0; k<V1.n ;k++){
+    V1pos[k]=abs(V1[k]);
+}
+
+//counting the "affected" indices on the boundary
+real numberofaffected = 0.;
+real tol=0.2;
+real[int] V1ofaffected(V1.n);
+for (int k=0; k<V1.n ;k++){
+    if (V1pos[k] > tol*V1pos.max){
+        V1ofaffected[numberofaffected] = V1pos[k];
+        numberofaffected = numberofaffected + 1.;
+    }
+}
+//to avoid division by 0
+if (numberofaffected == 0.){
+    numberofaffected = 1.;
+}
+real normofaffected= sqrt(V1ofaffected'*V1ofaffected);
+real normofboundary = sqrt(V1'*V1); 
+real R2LHS = normofaffected/numberofaffected;
+real R3LHS = normofboundary;
+
+real[int] datagenerated = [R2LHS, R3LHS];
+return datagenerated;
+}

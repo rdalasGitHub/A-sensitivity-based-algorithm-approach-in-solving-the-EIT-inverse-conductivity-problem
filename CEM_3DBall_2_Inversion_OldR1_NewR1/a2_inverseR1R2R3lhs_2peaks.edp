@@ -1,0 +1,53 @@
+//input: ffmatlib.idp, mesh, synthetic data
+//output: projection of the center of perturbation, LHS of R2, LHS of R3
+
+load "msh3"
+load "tetgen"
+load "medit"
+include "ffmatlib.idp" //to import to matlab
+
+real[int] V1(71);
+//load sensitivity
+string filename = "CEM_sphere_synthetic_h07_d30_r1_-100proj.txt";
+ifstream g(filename); g >> V1;
+
+//gettting absolute value of the sensitivity on the electrodes
+real[int] V1pos(V1.n);
+for (int k=0; k<V1.n ;k++){
+    V1pos[k]=abs(V1[k]);
+}
+
+//counting the "affected" indices on the boundary
+real numberofaffected = 0.;
+real tol=0.2;
+real[int] V1ofaffected(V1.n);
+for (int k=0; k<V1.n ;k++){
+    if (V1pos[k] > tol*V1pos.max){
+        V1ofaffected[numberofaffected] = V1pos[k];
+        numberofaffected = numberofaffected + 1.;
+    }
+}
+//to avoid division by 0
+if (numberofaffected == 0.){
+    numberofaffected = 1.;
+}
+real normofaffected= sqrt(V1ofaffected'*V1ofaffected);
+real normofboundary = sqrt(V1'*V1); 
+real R2LHS = normofaffected/numberofaffected;
+real R3LHS = normofboundary;
+
+real[int] resulting(6);
+real[int] PeakElectrodeNumber = [V1.imax+1, V1.imin+1];
+real[int] PeakElectrodeValue = [V1.max, V1.min];
+resulting = PeakElectrodeNumber;
+resulting[2] = PeakElectrodeValue[0];
+resulting[3] = PeakElectrodeValue[1];
+resulting[4] = R2LHS;
+resulting[5] = R3LHS;
+
+string filename2 = "PeaksR1LHSR2LHSR3_"+filename;
+{
+ofstream fh(filename2);
+fh.precision(16);
+fh<< resulting;
+}

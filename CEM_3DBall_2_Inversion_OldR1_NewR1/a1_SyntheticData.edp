@@ -1,0 +1,35 @@
+load "msh3"
+load "tetgen"
+load "medit"
+include "a1_SyntheticData.idp"
+include "getARGV.idp"
+
+real[int] rarray(1);
+real[int] R2Average(6);
+real[int] R3Boundary(6);
+real[int] V1(71);
+real[int] darray(11);
+real[int] proj =[-1., 0., 0.];
+real[int] projdirec = -proj;
+
+real d; //depth
+
+func string getfilename(real d, real r, string identifier) {
+	string filename = identifier+d+"_r"+r+"_-100proj.txt";
+	return filename;
+}
+
+for (int k=0; k<darray.n; k++){
+    d=0.3+0.05*k;
+    darray[k] = d;
+    for [i, rarrayi:rarray]{
+        rarrayi = 0.2*(i+1);
+        V1 = SyntheticData(rarrayi,d, proj, projdirec);
+    string V1data = getfilename(d*100,rarrayi*10, "CEM_sphere_synthetic_h07_d");
+    {
+    ofstream fh(V1data);
+    fh.precision(16);
+    fh<< V1;
+    }
+    }
+}
